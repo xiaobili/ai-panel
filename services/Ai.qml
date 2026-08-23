@@ -644,6 +644,15 @@ Singleton {
         property AiMessageData message
         property ApiStrategy currentStrategy
 
+        // Streaming budget: hard cap on characters accepted from a provider
+        // stream per request. Without it a malicious endpoint could stream
+        // forever and exhaust memory in this long-lived shell process.
+        // Character-based: JS strings are UTF-16, so .length bounds heap
+        // directly (~2 bytes/char).
+        readonly property int maxStreamChars: 8388608  // 8 Mi chars ≈ 16 MB heap per request
+        readonly property int maxLineChars: 1048576    // 1 Mi chars for any single SSE line
+        property int receivedChars: 0
+
         function markDone() {
             requester.message.done = true;
             if (root.postResponseHook) {
@@ -671,6 +680,7 @@ Singleton {
             
             requester.currentStrategy = root.currentApiStrategy;
             requester.currentStrategy.reset(); // Reset strategy state
+            requester.receivedChars = 0; // Reset streaming budget
 
             /* Put API key in environment variable */
             if (model.requires_key) requester.environment[`${root.apiKeyEnvVarName}`] = root.apiKeys ? (root.apiKeys[model.key_id] ?? "") : ""
@@ -768,6 +778,28 @@ Singleton {
         stdout: SplitParser {
             onRead: data => {
                 if (data.length === 0) return;
+
+                // Oversized single-line guard: no legitimate SSE chunk comes
+                // anywhere near this size. Skip before any downstream
+                // accumulation (strategy parsing, message content, tool args).
+                if (data.length > requester.maxLineChars) {
+                    console.log("[AI] Dropped oversized stream line (" + data.length + " chars)");
+                    return;
+                }
+
+                // Global stream budget: stop reading once the cap is exceeded.
+                requester.receivedChars += data.length;
+                if (requester.receivedChars > requester.maxStreamChars) {
+                    if (!requester.message.done) {
+                        const sizeError = "\n\n**Error**: response exceeded the maximum supported size and was stopped.";
+                        requester.message.rawContent += sizeError;
+                        requester.message.content += sizeError;
+                        requester.markDone();
+                        requester.running = false; // Terminate curl; onExited cleanup is safe (markDone guards on done)
+                    }
+                    return;
+                }
+
                 if (requester.message.thinking) requester.message.thinking = false;
                 // console.log("[Ai] Raw response line: ", data);
 

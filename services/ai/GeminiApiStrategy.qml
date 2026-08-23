@@ -99,18 +99,36 @@ ApiStrategy {
         return "";
     }
 
+    // Buffer guard: bounds memory accumulated between array-chunk delimiters
+    // from a hostile endpoint (Ai.qml's global stream budget is the outer
+    // layer; this is the per-buffer inner layer). reset() clears the buffer
+    // between requests.
+    readonly property int maxBufferChars: 1048576 // 1 Mi chars ≈ 2 MB heap
+
+    function appendToBuffer(chunk, message) {
+        if (buffer.length + chunk.length > maxBufferChars) {
+            buffer = ""; // Drop the oversized buffer; it can never be legitimate
+            const sizeError = "\n\n**Error**: response exceeded the maximum supported size.";
+            message.rawContent += sizeError;
+            message.content += sizeError;
+            return { finished: true };
+        }
+        buffer += chunk;
+        return {};
+    }
+
     function parseResponseLine(line, message) {
         if (line.startsWith("[")) {
-            buffer += line.slice(1).trim();
+            return appendToBuffer(line.slice(1).trim(), message);
         } else if (line === "]") {
-            buffer += line.slice(0, -1).trim();
+            const result = appendToBuffer(line.slice(0, -1).trim(), message);
+            if (result.finished) return result;
             return parseBuffer(message);
         } else if (line.startsWith(",")) {
             return parseBuffer(message);
         } else {
-            buffer += line.trim();
+            return appendToBuffer(line.trim(), message);
         }
-        return {};
     }
 
     function parseBuffer(message) {

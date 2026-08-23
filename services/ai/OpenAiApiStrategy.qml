@@ -12,6 +12,15 @@ ApiStrategy {
     // arguments form valid JSON. reset() must clear this between requests.
     property var _pendingToolCalls: ({})
 
+    // Accumulation guards: a hostile endpoint must not be able to grow the
+    // slot map or fragment buffers without bound. Values give large headroom
+    // over legitimate parallel tool calls (single digits) and real argument
+    // payloads (<10 KB). Character-based: JS strings are UTF-16, so .length
+    // bounds heap directly.
+    readonly property int maxToolCallSlots: 64         // tracked indices per request
+    readonly property int maxFunctionNameLength: 1024  // chars, per tool call
+    readonly property int maxFunctionArgsLength: 262144 // chars (~512 KB heap), per tool call
+
     function buildEndpoint(model: AiModel): string {
         // console.log("[AI] Endpoint: " + model.endpoint);
         return CF.StringUtils.shellDoubleQuoteEscape(model.endpoint);
@@ -120,14 +129,28 @@ ApiStrategy {
                 for (let c = 0; c < fragments.length; c++) {
                     const tc = fragments[c];
                     const idx = tc.index ?? 0;
+                    // Slot-count guard: ignore indices beyond the cap. Such
+                    // slots are dropped entirely — they can never reach the
+                    // approval/execution flow.
+                    if (idx < 0 || idx >= root.maxToolCallSlots) continue;
                     if (!root._pendingToolCalls[idx]) {
                         root._pendingToolCalls[idx] = { id: "", name: "", args: "", done: false };
                     }
                     const slot = root._pendingToolCalls[idx];
                     if (slot.done) continue; // Ignore stray fragments after emit
                     if (tc.id && slot.id.length === 0) slot.id = tc.id;
-                    if (tc.function?.name) slot.name += tc.function.name;
-                    if (tc.function?.arguments) slot.args += tc.function.arguments;
+                    // Length guards: truncate fragments at the caps. A slot
+                    // whose arguments were truncated by the cap can no longer
+                    // form valid JSON, so it is silently never emitted (no
+                    // partial tool call can reach approval or execution).
+                    if (tc.function?.name && slot.name.length < root.maxFunctionNameLength) {
+                        const roomN = root.maxFunctionNameLength - slot.name.length;
+                        slot.name += tc.function.name.slice(0, roomN);
+                    }
+                    if (tc.function?.arguments && slot.args.length < root.maxFunctionArgsLength) {
+                        const roomA = root.maxFunctionArgsLength - slot.args.length;
+                        slot.args += tc.function.arguments.slice(0, roomA);
+                    }
 
                     if (slot.name.length > 0 && slot.args.length > 0) {
                         try {
