@@ -653,6 +653,27 @@ Singleton {
         readonly property int maxLineChars: 1048576    // 1 Mi chars for any single SSE line
         property int receivedChars: 0
 
+        // Pre-parser stream cap: bounds the bytes entering SplitParser's
+        // internal incomplete-line buffer (Process::stdoutBuffer), which
+        // Quickshell appends to without limit while a hostile endpoint sends
+        // bytes containing no newline. `head -c` exits at the cap, closing
+        // the pipe and terminating curl (SIGPIPE / write error), so no more
+        // than this many bytes can ever reach the parser. Byte-based:
+        // enforced before any text decoding.
+        readonly property int maxStreamBytes: 16777216 // 16 MiB per response
+        readonly property string streamTruncateSentinel: "__AIPANEL_STREAM_TRUNCATED__"
+
+        // Appended after each curl invocation in the generated request
+        // script. Caps the stream and, when the cap was hit (curl died via
+        // SIGPIPE 141 or a graceful write error 23/55), emits a sentinel
+        // line that onRead converts into the visible size error.
+        // Legitimate responses finish far below the cap and pass through
+        // byte-identically.
+        readonly property string streamPipelineSuffix: ` | head -c ${maxStreamBytes}
+if [ "\${PIPESTATUS[0]}" -eq 141 ] || [ "\${PIPESTATUS[0]}" -eq 23 ] || [ "\${PIPESTATUS[0]}" -eq 55 ]; then printf '%s\\n' '${streamTruncateSentinel}'
+fi
+`
+
         function markDone() {
             requester.message.done = true;
             if (root.postResponseHook) {
@@ -755,13 +776,13 @@ Singleton {
                     + ` ${headerString}`
                     + (authHeader ? ` ${authHeader}` : "")
                     + ` --data-binary "@${Directories.aiTmpDir}/request-body.json"`
-                    + "\n";
+                    + requester.streamPipelineSuffix;
             } else {
                 scriptRequestContent += `curl --no-buffer "${endpoint}"`
                     + ` ${headerString}`
                     + (authHeader ? ` ${authHeader}` : "")
                     + ` --data '${CF.StringUtils.shellSingleQuoteEscape(bodyJson)}'`
-                    + "\n";
+                    + requester.streamPipelineSuffix;
             }
 
             /* Send the request */
@@ -778,6 +799,20 @@ Singleton {
         stdout: SplitParser {
             onRead: data => {
                 if (data.length === 0) return;
+
+                // Pre-parser truncation sentinel: emitted by the generated
+                // script when `head -c` capped the byte stream (see
+                // streamPipelineSuffix). Surface the visible size error once
+                // and finish — skip provider parsing entirely.
+                if (data === requester.streamTruncateSentinel) {
+                    if (!requester.message.done) {
+                        const truncError = "\n\n**Error**: response exceeded the maximum supported size and was stopped.";
+                        requester.message.rawContent += truncError;
+                        requester.message.content += truncError;
+                        requester.markDone();
+                    }
+                    return;
+                }
 
                 // Oversized single-line guard: no legitimate SSE chunk comes
                 // anywhere near this size. Skip before any downstream
