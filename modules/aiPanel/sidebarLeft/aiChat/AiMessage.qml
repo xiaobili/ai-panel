@@ -253,6 +253,14 @@ Rectangle {
             id: messageContentColumnLayout
             spacing: 0
 
+            Loader {
+                Layout.fillWidth: true
+                active: root.messageData?.kind === "coinflip"
+                sourceComponent: CoinFlipCard {
+                    messageData: root.messageData
+                }
+            }
+
             Item {
                 Layout.fillWidth: true
                 implicitHeight: loadingIndicatorLoader.shown ? loadingIndicatorLoader.implicitHeight : 0

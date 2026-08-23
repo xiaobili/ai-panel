@@ -27,6 +27,7 @@ QtObject {
     property string key_get_link
     property string key_get_description
     property string api_format: "openai"
+    property bool supports_image_input: false
     property var tools
     property var extraParams: ({})
 }

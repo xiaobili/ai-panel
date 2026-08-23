@@ -2,8 +2,16 @@ import QtQuick
 import "../../modules/common/functions" as CF
 
 ApiStrategy {
+    id: root
+
     property bool isReasoning: false
-    
+
+    // Streaming tool calls arrive fragmented across deltas (name and
+    // arguments split arbitrarily, keyed by index). Accumulate fragments per
+    // index; emit the existing functionCall structure once the accumulated
+    // arguments form valid JSON. reset() must clear this between requests.
+    property var _pendingToolCalls: ({})
+
     function buildEndpoint(model: AiModel): string {
         // console.log("[AI] Endpoint: " + model.endpoint);
         return CF.StringUtils.shellDoubleQuoteEscape(model.endpoint);
@@ -25,7 +33,52 @@ ApiStrategy {
             "tools": tools,
             "temperature": temperature,
         };
+        // Multimodal input (vision-capable models only reach this point —
+        // text-only models are filtered in makeRequest): convert the last
+        // user message to a content array carrying the image as an inline
+        // base64 data URL. The placeholder is spliced by
+        // finalizeScriptContent() so bash expands the runtime-computed value.
+        const trimmedPath = filePath && filePath.length > 0 ? CF.FileUtils.trimFileProtocol(filePath) : "";
+        if (trimmedPath.length > 0) {
+            const msgs = baseData.messages;
+            for (let i = msgs.length - 1; i >= 0; i--) {
+                if (msgs[i].role === "user") {
+                    msgs[i].content = [
+                        { type: "text", text: msgs[i].content },
+                        { type: "image_url", image_url: { url: "{{ imageDataUrl }}" } },
+                    ];
+                    break;
+                }
+            }
+        }
         return model.extraParams ? Object.assign({}, baseData, model.extraParams) : baseData;
+    }
+
+    function buildScriptFileSetup(filePath: string): string {
+        let content = "";
+        content += `IMAGE_PATH='${CF.StringUtils.shellSingleQuoteEscape(filePath)}'\n`;
+        content += 'if [ ! -f "$IMAGE_PATH" ] || [ ! -s "$IMAGE_PATH" ]; then\n';
+        content += '  printf \'{"error":{"message":"Attachment failed: file not found."}}\\n,\\n\'\n';
+        content += '  exit 0\n';
+        content += 'fi\n';
+        content += 'IMAGE_SIZE=$(wc -c < "$IMAGE_PATH")\n';
+        content += 'if [ "$IMAGE_SIZE" -gt 14000000 ]; then\n';
+        content += '  printf \'{"error":{"message":"Image too large (max 14 MB)."}}\\n,\\n\'\n';
+        content += '  exit 0\n';
+        content += 'fi\n';
+        content += 'MIME_TYPE=$(file -b --mime-type "$IMAGE_PATH")\n';
+        content += 'case "$MIME_TYPE" in image/png|image/jpeg|image/webp|image/gif) ;; *)\n';
+        content += '  printf \'{"error":{"message":"Unsupported attachment type."}}\\n,\\n\'\n';
+        content += '  exit 0\n';
+        content += ';; esac\n';
+        content += 'IMAGE_DATA_URL="data:${MIME_TYPE};base64,$(base64 -w0 "$IMAGE_PATH")"\n';
+        return content;
+    }
+
+    function finalizeScriptContent(scriptContent: string): string {
+        // Quote-splice: break out of curl's single-quoted --data so bash can
+        // expand the runtime-computed data URL (same mechanism Gemini uses).
+        return scriptContent.replace('"{{ imageDataUrl }}"', '\'\"$IMAGE_DATA_URL\"\'');
     }
 
     function buildAuthorizationHeader(apiKeyEnvVarName: string): string {
@@ -60,6 +113,36 @@ ApiStrategy {
             }
 
             let newContent = "";
+
+            // Tool calls (fragmented across deltas, keyed by index)
+            if (dataJson.choices[0]?.delta?.tool_calls) {
+                const fragments = dataJson.choices[0].delta.tool_calls;
+                for (let c = 0; c < fragments.length; c++) {
+                    const tc = fragments[c];
+                    const idx = tc.index ?? 0;
+                    if (!root._pendingToolCalls[idx]) {
+                        root._pendingToolCalls[idx] = { id: "", name: "", args: "", done: false };
+                    }
+                    const slot = root._pendingToolCalls[idx];
+                    if (slot.done) continue; // Ignore stray fragments after emit
+                    if (tc.id && slot.id.length === 0) slot.id = tc.id;
+                    if (tc.function?.name) slot.name += tc.function.name;
+                    if (tc.function?.arguments) slot.args += tc.function.arguments;
+
+                    if (slot.name.length > 0 && slot.args.length > 0) {
+                        try {
+                            const parsedArgs = JSON.parse(slot.args);
+                            slot.done = true;
+                            message.functionName = slot.name;
+                            message.functionCall = slot.name;
+                            return { functionCall: { name: slot.name, args: parsedArgs, id: slot.id } };
+                        } catch (e) {
+                            // Arguments not complete yet — keep accumulating
+                        }
+                    }
+                }
+                return {};
+            }
 
             const responseContent = dataJson.choices[0]?.delta?.content || dataJson.message?.content;
             const responseReasoning = dataJson.choices[0]?.delta?.reasoning || dataJson.choices[0]?.delta?.reasoning_content;
@@ -116,6 +199,7 @@ ApiStrategy {
     
     function reset() {
         isReasoning = false;
+        root._pendingToolCalls = ({});
     }
 
 }

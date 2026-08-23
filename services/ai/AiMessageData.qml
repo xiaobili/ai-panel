@@ -23,4 +23,9 @@ QtObject {
     property string functionResponse
     property bool functionPending: false
     property bool visibleToUser: true
+    property string kind
+    property bool coinResult: false
+    // Transient animation trigger for freshly created local cards. Never
+    // serialized: messages restored from saved chats render landed.
+    property bool playAnimation: false
 }

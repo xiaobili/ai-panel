@@ -191,6 +191,14 @@ echo "Hello, $name!"
             GlobalStates.dvdActive = true;
             return;
         }
+        // Local UI intents — handled entirely offline, never sent to a provider.
+        const normalizedInput = inputText.trim().toLowerCase().replace(/[!?.]+$/, "").replace(/\s+/g, " ");
+        if (["flip a coin", "flip coin", "coin flip", "coinflip", "heads or tails", "toss a coin", "toss coin",
+             "flip a coin please", "please flip a coin"].includes(normalizedInput)) {
+            Ai.addMessage(inputText.trim(), "user");
+            Ai.startCoinFlip();
+            return;
+        }
         if (inputText.startsWith(root.commandPrefix)) {
             // Handle special commands
             const command = inputText.split(" ")[0].substring(1);
@@ -201,6 +209,12 @@ echo "Hello, $name!"
             } else {
                 Ai.addMessage(Translation.tr("Unknown command: ") + command, Ai.interfaceRole);
             }
+        } else if (Ai.attachmentUnsupported) {
+            // Text-only model with an image attached: stop before any request.
+            // The attachment stays pending so switching models is enough;
+            // restore the typed prompt for an easy resend.
+            Ai.addMessage(Translation.tr("This model doesn't support image input — switch to a vision-capable model or remove the attachment."), Ai.interfaceRole);
+            messageInputField.text = inputText;
         } else {
             Ai.sendUserMessage(inputText);
         }

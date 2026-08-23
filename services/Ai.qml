@@ -268,6 +268,7 @@ Singleton {
             "key_get_link": "https://aistudio.google.com/app/apikey",
             "key_get_description": Translation.tr("**Pricing**: free. Data used for training.\n\n**Instructions**: Log into Google account, allow AI Studio to create Google Cloud project or whatever it asks, go back and click Get API key"),
             "api_format": "gemini",
+            "supports_image_input": true,
         }),
         "gemini-3-flash": aiModelComponent.createObject(this, {
             "name": "Gemini 3 Flash",
@@ -281,6 +282,7 @@ Singleton {
             "key_get_link": "https://aistudio.google.com/app/apikey",
             "key_get_description": Translation.tr("**Pricing**: free. Data used for training.\n\n**Instructions**: Log into Google account, allow AI Studio to create Google Cloud project or whatever it asks, go back and click Get API key"),
             "api_format": "gemini",
+            "supports_image_input": true,
         }),
         "mistral-medium-3": aiModelComponent.createObject(this, {
             "name": "Mistral Medium 3",
@@ -295,9 +297,57 @@ Singleton {
             "key_get_description": Translation.tr("**Instructions**: Log into Mistral account, go to Keys on the sidebar, click Create new key"),
             "api_format": "mistral",
         }),
+        "groq-gpt-oss-120b": aiModelComponent.createObject(this, {
+            "name": "GPT-OSS 120B",
+            "icon": "groq-symbolic",
+            "description": Translation.tr("Online | %1's model | OpenAI's open-weight 120B model hosted on Groq. Free tier with rate limits.").arg("Groq"),
+            "homepage": "https://console.groq.com/docs/models",
+            "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+            "model": "openai/gpt-oss-120b",
+            "requires_key": true,
+            "key_id": "groq",
+            "key_get_link": "https://console.groq.com/keys",
+            "key_get_description": Translation.tr("**Pricing**: free tier with rate limits.\n\n**Instructions**: Create a Groq account, go to console.groq.com/keys and click Create API Key"),
+            "api_format": "openai",
+        }),
+        "groq-gpt-oss-20b": aiModelComponent.createObject(this, {
+            "name": "GPT-OSS 20B",
+            "icon": "groq-symbolic",
+            "description": Translation.tr("Online | %1's model | OpenAI's open-weight 20B model hosted on Groq. Free tier with rate limits.").arg("Groq"),
+            "homepage": "https://console.groq.com/docs/models",
+            "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+            "model": "openai/gpt-oss-20b",
+            "requires_key": true,
+            "key_id": "groq",
+            "key_get_link": "https://console.groq.com/keys",
+            "key_get_description": Translation.tr("**Pricing**: free tier with rate limits.\n\n**Instructions**: Create a Groq account, go to console.groq.com/keys and click Create API Key"),
+            "api_format": "openai",
+        }),
+        "groq-qwen3.6-27b": aiModelComponent.createObject(this, {
+            "name": "Qwen3.6 27B",
+            "icon": "groq-symbolic",
+            "description": Translation.tr("Online | %1's model | Qwen's open-weight 27B model hosted on Groq. Free tier with rate limits.").arg("Groq"),
+            "homepage": "https://console.groq.com/docs/models",
+            "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+            "model": "qwen/qwen3.6-27b",
+            "requires_key": true,
+            "key_id": "groq",
+            "key_get_link": "https://console.groq.com/keys",
+            "key_get_description": Translation.tr("**Pricing**: free tier with rate limits.\n\n**Instructions**: Create a Groq account, go to console.groq.com/keys and click Create API Key"),
+            "api_format": "openai",
+            "supports_image_input": true,
+        }),
     }
     property var modelList: Object.keys(root.models)
     property var currentModelId: modelList.includes(Persistent.states?.ai?.model) ? Persistent.states.ai.model : modelList[0]
+
+    // True when an attachment is pending on a model without image support.
+    // Live binding: switching models re-evaluates instantly, so the send
+    // gate in AiChat unlocks as soon as a vision-capable model is chosen.
+    readonly property bool attachmentUnsupported: {
+        const model = models[currentModelId];
+        return !!(root.pendingFilePath && root.pendingFilePath.length > 0 && model && model.supports_image_input !== true);
+    }
 
     property var apiStrategies: {
         "openai": openaiApiStrategy.createObject(this),
@@ -575,6 +625,20 @@ Singleton {
         id: requesterScriptFile
     }
 
+    // Multimodal request bodies can exceed the kernel's per-argument size
+    // limit (MAX_ARG_STRLEN, 128 KiB) once base64-encoded, so the JSON body
+    // is assembled from two files inside the private tmp dir and handed to
+    // curl as --data-binary instead of living on the command line.
+    FileView {
+        id: requestBodyHeadFile
+        path: `${Directories.aiTmpDir}/body-head.json`
+    }
+
+    FileView {
+        id: requestBodyTailFile
+        path: `${Directories.aiTmpDir}/body-tail.json`
+    }
+
     Process {
         id: requester
         property AiMessageData message
@@ -592,6 +656,15 @@ Singleton {
 
         function makeRequest() {
             const model = models[currentModelId];
+
+            // Capability-aware attachment handling: text-only models get a
+            // visible notice and the request is stopped entirely (defensive
+            // fallback — the send path is already gated in AiChat).
+            if (root.pendingFilePath && !(model.supports_image_input === true)) {
+                root.addMessage(Translation.tr("This model doesn't support image input — switch to a vision-capable model or remove the attachment."), root.interfaceRole);
+                root.pendingFilePath = "";
+                return;
+            }
 
             // Fetch API keys if needed
             if (model?.requires_key && !KeyringStorage.loaded) KeyringStorage.fetchKeyringData();
@@ -653,13 +726,34 @@ Singleton {
             }
 
             /* Create command string */
+            /* Send the request.
+             * Multimodal bodies (base64 image) exceed the kernel's 128 KiB
+             * per-argument limit, so when the strategy emitted the image
+             * placeholder we assemble the JSON body from files in the private
+             * tmp dir and pass it via --data-binary instead of argv. */
+            const bodyJson = JSON.stringify(data);
+            const IMAGE_PLACEHOLDER = '"{{ imageDataUrl }}"';
+            const placeholderIdx = bodyJson.indexOf(IMAGE_PLACEHOLDER);
             let scriptRequestContent = ""
-            scriptRequestContent += `curl --no-buffer "${endpoint}"`
-                + ` ${headerString}`
-                + (authHeader ? ` ${authHeader}` : "")
-                + ` --data '${CF.StringUtils.shellSingleQuoteEscape(JSON.stringify(data))}'`
-                + "\n"
-            
+            if (placeholderIdx !== -1) {
+                requestBodyHeadFile.setText(bodyJson.slice(0, placeholderIdx));
+                requestBodyTailFile.setText(bodyJson.slice(placeholderIdx + IMAGE_PLACEHOLDER.length));
+                scriptRequestContent += `cat "${Directories.aiTmpDir}/body-head.json" > "${Directories.aiTmpDir}/request-body.json"\n`
+                    + `printf '"%s"' "$IMAGE_DATA_URL" >> "${Directories.aiTmpDir}/request-body.json"\n`
+                    + `cat "${Directories.aiTmpDir}/body-tail.json" >> "${Directories.aiTmpDir}/request-body.json"\n`
+                    + `curl --no-buffer "${endpoint}"`
+                    + ` ${headerString}`
+                    + (authHeader ? ` ${authHeader}` : "")
+                    + ` --data-binary "@${Directories.aiTmpDir}/request-body.json"`
+                    + "\n";
+            } else {
+                scriptRequestContent += `curl --no-buffer "${endpoint}"`
+                    + ` ${headerString}`
+                    + (authHeader ? ` ${authHeader}` : "")
+                    + ` --data '${CF.StringUtils.shellSingleQuoteEscape(bodyJson)}'`
+                    + "\n";
+            }
+
             /* Send the request */
             const scriptContent = requester.currentStrategy.finalizeScriptContent(scriptShebang + scriptFileSetupContent + scriptRequestContent)
             const shellScriptPath = CF.FileUtils.trimFileProtocol(root.requestScriptFilePath)
@@ -733,6 +827,27 @@ Singleton {
             trimmedPath = Directories.home + trimmedPath.slice(1);
         }
         root.pendingFilePath = trimmedPath;
+    }
+
+    // Local "Flip a Coin" UX: result decided here (never by the model), no
+    // provider request involved. The card animates only for freshly created
+    // messages (_playAnimation is transient and never serialized), so loaded
+    // chats render their coins in the landed state.
+    function startCoinFlip() {
+        const coinResult = Math.random() < 0.5;
+        const message = aiMessageComponent.createObject(root, {
+            "role": root.interfaceRole,
+            "content": "",
+            "rawContent": "",
+            "kind": "coinflip",
+            "coinResult": coinResult,
+            "thinking": false,
+            "done": true,
+        });
+        message.playAnimation = true;
+        const id = idForMessage(message);
+        root.messageIDs = [...root.messageIDs, id];
+        root.messageByID[id] = message;
     }
 
     function regenerate(messageIndex) {
@@ -871,6 +986,8 @@ function createFunctionOutputMessage(name, output, includeOutputInChat = true, f
                 "functionCallId": message.functionCallId,
                 "functionResponse": message.functionResponse,
                 "visibleToUser": message.visibleToUser,
+                "kind": message.kind,
+                "coinResult": message.coinResult,
             })
         })
     }
@@ -928,6 +1045,8 @@ function createFunctionOutputMessage(name, output, includeOutputInChat = true, f
                     "functionCallId": message.functionCallId ?? "",
                     "functionResponse": message.functionResponse,
                     "visibleToUser": message.visibleToUser,
+                    "kind": message.kind ?? "",
+                    "coinResult": message.coinResult ?? false,
                 });
             }
         } catch (e) {
