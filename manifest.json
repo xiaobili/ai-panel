@@ -5,7 +5,7 @@
   "version": "0.1.5",
   "author": "atif-1402",
   "license": "MIT",
-  "description": "A native AI chat sidebar for Omarchy, summoned with a keypress and built to feel like part of the window manager rather than a browser tab bolted on. Prompts aren't blind — placeholders pull in live context automatically, including the app you currently have focused, your distro, desktop environment, and the time, so presets can react to what you're actually doing instead of starting from zero every time. Runs against four providers out of the box (Gemini, Mistral, DeepSeek, and local Ollama for fully offline use), with streaming token-by-token responses and full markdown rendering for code blocks and tables. Everything is driven through a slash-command surface — swap models, set your system prompt, manage API keys, adjust temperature, attach files, save and reload named conversations — so the sidebar stays keyboard-first end to end. Chats are stored locally, the panel follows your active Omarchy theme including light mode, and prompt presets are just drop-in .md files, so building your own library takes no more than saving a text file.",
+  "description": "A native AI chat sidebar for Omarchy with multi-provider streaming, markdown rendering, slash commands, local chat storage, prompt presets, file attachments, and theme-aware styling.",
   "kinds": ["panel"],
   "keepLoaded": true,
   "entryPoints": {
