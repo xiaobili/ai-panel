@@ -20,11 +20,37 @@ Rectangle {
     property bool renderMarkdown: true
     property bool editing: false
 
-    property list<var> messageBlocks: StringUtils.splitMarkdownBlocks(root.messageData?.content)
+    // Initial value: parsed from current content when the delegate is
+    // created or re-entered after editing.  During streaming the
+    // Connections block below keeps this up-to-date via Qt.callLater so
+    // the expensive splitMarkdownBlocks regex runs at most once per
+    // event-loop frame instead of on every SSE delta (eliminates the
+    // O(n²) rendering cost for large responses).
+    property list<var> messageBlocks: root.messageData?.content
+        ? StringUtils.splitMarkdownBlocks(root.messageData.content)
+        : []
 
     anchors.left: parent?.left
     anchors.right: parent?.right
     implicitHeight: columnLayout.implicitHeight + root.messagePadding * 2
+
+    // Debounced content → block-split pipeline.  Replaces the former
+    // declarative binding which re-ran the full regex scan of the entire
+    // accumulated response on every streaming delta.  Qt.callLater
+    // coalesces rapid property-change notifications so the parse runs at
+    // most once per event-loop frame (~16 ms).
+    Connections {
+        target: root.messageData
+        enabled: root.messageData !== null
+        function onContentChanged() {
+            if (!root.messageData) return;
+            Qt.callLater(function() {
+                if (!root.messageData) return;
+                if (root.editing) return;
+                root.messageBlocks = StringUtils.splitMarkdownBlocks(root.messageData.content);
+            });
+        }
+    }
 
     radius: Appearance.rounding.normal
     color: Appearance.colors.colLayer2
