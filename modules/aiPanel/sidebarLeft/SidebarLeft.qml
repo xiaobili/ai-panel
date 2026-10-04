@@ -83,6 +83,7 @@ Scope { // Scope
             visible: GlobalStates.sidebarLeftOpen
             
             property bool extend: false
+            property bool focusPrimed: false
             property real sidebarWidth: panelWindow.extend ? Appearance.sizes.sidebarWidthExtended : Appearance.sizes.sidebarWidth
             property var contentParent: sidebarLeftBackground
 
@@ -92,33 +93,51 @@ Scope { // Scope
 
             exclusionMode: ExclusionMode.Normal
             exclusiveZone: root.pin ? sidebarWidth : 0
-            implicitWidth: Appearance.sizes.sidebarWidthExtended + Appearance.sizes.elevationMargin
             WlrLayershell.namespace: "quickshell:sidebarLeft"
-            // Hyprland 0.49: OnDemand is Exclusive, Exclusive just breaks click-outside-to-close
-            WlrLayershell.keyboardFocus: WlrKeyboardFocus.OnDemand
+            WlrLayershell.layer: WlrLayer.Overlay
+            WlrLayershell.keyboardFocus: visible
+                ? (focusPrimed ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.Exclusive)
+                : WlrKeyboardFocus.None
             color: "transparent"
 
             anchors {
                 top: true
                 left: true
                 bottom: true
+                right: true
             }
 
             mask: Region {
-                item: sidebarLeftBackground
+                width: panelWindow.width
+                height: panelWindow.height
             }
 
             onVisibleChanged: {
                 if (visible) {
-                    GlobalFocusGrab.addDismissable(panelWindow);
+                    focusPrimed = false;
+                    focusPrimeTimer.restart();
                 } else {
-                    GlobalFocusGrab.removeDismissable(panelWindow);
+                    focusPrimeTimer.stop();
+                    focusPrimed = false;
                 }
             }
-            Connections {
-                target: GlobalFocusGrab
-                function onDismissed() {
-                    panelWindow.hide();
+            Timer {
+                id: focusPrimeTimer
+                interval: 75
+                onTriggered: {
+                    if (panelWindow.visible) panelWindow.focusPrimed = true;
+                }
+            }
+            MouseArea {
+                anchors.fill: parent
+                acceptedButtons: Qt.AllButtons
+                onPressed: mouse => {
+                    if (mouse.x < sidebarLeftBackground.x
+                        || mouse.y < sidebarLeftBackground.y
+                        || mouse.x >= sidebarLeftBackground.x + sidebarLeftBackground.width
+                        || mouse.y >= sidebarLeftBackground.y + sidebarLeftBackground.height) {
+                        panelWindow.hide();
+                    }
                 }
             }
 
