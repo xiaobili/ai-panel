@@ -9,7 +9,7 @@ ApiStrategy {
         return CF.StringUtils.shellDoubleQuoteEscape(model.endpoint);
     }
 
-    function buildRequestData(model: AiModel, messages, systemPrompt: string, temperature: real, tools: list<var>, filePath: string) {
+    function buildRequestData(model: AiModel, messages, systemPrompt: string, temperature: real, tools: list<var>, filePath: string, maxTokens: int) {
         let baseData = {
             "model": model.model,
             "messages": [
@@ -34,6 +34,7 @@ ApiStrategy {
             "stream": true,
             "temperature": temperature,
             "tools": tools,
+            "max_tokens": maxTokens,
         };
         // console.log("[AI] Request data: ", JSON.stringify(baseData, null, 2));
         return model.extraParams ? Object.assign({}, baseData, model.extraParams) : baseData;
@@ -109,6 +110,12 @@ ApiStrategy {
             // Text
             message.content += newContent;
             message.rawContent += newContent;
+
+            if (dataJson.choices[0]?.finish_reason === "length") {
+                const limitNotice = "\n\n**Notice**: response stopped at the model's output token limit.";
+                message.rawContent += limitNotice;
+                message.content += limitNotice;
+            }
 
             // Usage metadata
             if (dataJson.usage) {

@@ -19,7 +19,7 @@ ApiStrategy {
         return result;
     }
 
-    function buildRequestData(model: AiModel, messages, systemPrompt: string, temperature: real, tools: list<var>, filePath: string) {
+    function buildRequestData(model: AiModel, messages, systemPrompt: string, temperature: real, tools: list<var>, filePath: string, maxTokens: int) {
         let contents = messages.map(message => {
             // console.log("[AI] Building request data for message:", JSON.stringify(message, null, 2));
             const geminiApiRoleName = (message.role === "assistant") ? "model" : message.role;
@@ -88,6 +88,7 @@ ApiStrategy {
             },
             "generationConfig": {
                 "temperature": temperature,
+                "maxOutputTokens": maxTokens,
             },
         };
         // print("Gemini API call payload:", JSON.stringify(baseData, null, 2));
@@ -184,8 +185,16 @@ ApiStrategy {
 
             // Normal text response
             const responseContent = dataJson.candidates[0]?.content?.parts[0]?.text
-            message.rawContent += responseContent;
-            message.content += responseContent;
+            if (responseContent) {
+                message.rawContent += responseContent;
+                message.content += responseContent;
+            }
+
+            if (dataJson.candidates[0]?.finishReason === "MAX_TOKENS") {
+                const limitNotice = "\n\n**Notice**: response stopped at the model's output token limit.";
+                message.rawContent += limitNotice;
+                message.content += limitNotice;
+            }
             
             // Handle annotations and metadata
             const annotationSources = dataJson.candidates[0]?.groundingMetadata?.groundingChunks?.map(chunk => {

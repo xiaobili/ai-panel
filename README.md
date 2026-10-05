@@ -39,28 +39,40 @@ Open The panel and pick a model by typing `/model` and then add api key of the m
 
 ## Slash commands
 
-| Command | Description |
-|---|---|
-| `/model` | Choose model |
-| `/prompt` | Set the system prompt |
-| `/key` | Set API key |
-| `/temp` | Set temperature (0–2 Gemini, 0–1 others) |
-| `/tool` | Set the tool to use for the model |
-| `/attach` | Attach a file (Gemini only) |
-| `/save` | Save the current chat |
-| `/load` | Load a saved chat |
-| `/clear` | Clear chat history |
+| Command   | Description                              |
+| --------- | ---------------------------------------- |
+| `/model`  | Choose model                             |
+| `/prompt` | Set the system prompt                    |
+| `/key`    | Set API key                              |
+| `/temp`   | Set temperature (0–2 Gemini, 0–1 others) |
+| `/tool`   | Set the tool to use for the model        |
+| `/attach` | Attach a file (Gemini only)              |
+| `/save`   | Save the current chat                    |
+| `/load`   | Load a saved chat                        |
+| `/clear`  | Clear chat history                       |
+
+## Max output tokens
+
+Set `ai.max_tokens` in `~/.config/ai-panel/config.json` to change the output token limit. The default is `8192`.
+
+```json
+{
+	"ai": {
+		"max_tokens": 4096
+	}
+}
+```
 
 ### Custom prompts
 
 Drop `.md` or `.txt` files into `~/.config/ai-panel/ai/prompts/` and they appear in `/prompt`. Available placeholders:
 
-| Placeholder | Replaced with |
-|---|---|
-| `{DISTRO}` | Distribution name |
-| `{DE}` | Desktop environment / WM |
-| `{DATETIME}` | Current date & time |
-| `{WINDOWCLASS}` | Active window class |
+| Placeholder     | Replaced with            |
+| --------------- | ------------------------ |
+| `{DISTRO}`      | Distribution name        |
+| `{DE}`          | Desktop environment / WM |
+| `{DATETIME}`    | Current date & time      |
+| `{WINDOWCLASS}` | Active window class      |
 
 ## Uninstall
 

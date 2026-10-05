@@ -26,7 +26,7 @@ ApiStrategy {
         return CF.StringUtils.shellDoubleQuoteEscape(model.endpoint);
     }
 
-    function buildRequestData(model: AiModel, messages, systemPrompt: string, temperature: real, tools: list<var>, filePath: string) {
+    function buildRequestData(model: AiModel, messages, systemPrompt: string, temperature: real, tools: list<var>, filePath: string, maxTokens: int) {
         let baseData = {
             "model": model.model,
             "messages": [
@@ -41,6 +41,7 @@ ApiStrategy {
             "stream": true,
             "tools": tools,
             "temperature": temperature,
+            "max_tokens": maxTokens,
         };
         // Multimodal input (vision-capable models only reach this point —
         // text-only models are filtered in makeRequest): convert the last
@@ -190,6 +191,12 @@ ApiStrategy {
 
             message.content += newContent;
             message.rawContent += newContent;
+
+            if (dataJson.choices[0]?.finish_reason === "length") {
+                const limitNotice = "\n\n**Notice**: response stopped at the model's output token limit.";
+                message.rawContent += limitNotice;
+                message.content += limitNotice;
+            }
 
             // Usage metadata
             if (dataJson.usage) {
