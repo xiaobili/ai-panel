@@ -230,7 +230,7 @@ ColumnLayout {
                 textLinesRepeater.textLineOpacities.push(root.messageDone ? 1 : 0);
             }
         }
-        delegate: TextArea {
+        delegate: StyledTextArea {
             id: textArea
             required property int index
             required property string modelData
